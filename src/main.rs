@@ -1,42 +1,108 @@
+use std::env;
+use std::fs;
+use walkdir::WalkDir;
+use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
+use atty::Stream;
 
-use axum::{http::StatusCode, response::Html, routing::{post, get}, Json, Router};
-use types::User;
-use tracing::{info_span, Span};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use tower_http::{classify::ServerErrorsFailureClass, trace::TraceLayer};
+fn get_directory_size(path: &std::path::Path) -> u64 {
+    WalkDir::new(path)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file())
+        .map(|e| e.metadata().unwrap().len())
+        .sum()
+}
 
-mod types;
+fn format_bytes(bytes: u64) -> String {
+    const BYTE: u64 = 1;
+    const KIB: u64 = 1024 * BYTE;
+    const MIB: u64 = 1024 * KIB;
+    const GIB: u64 = 1024 * MIB;
+    const TIB: u64 = 1024 * GIB;
 
+    if bytes < KIB {
+        format!("{} B", bytes)
+    } else if bytes < MIB {
+        format!("{:.2} KiB", bytes as f64 / KIB as f64)
+    } else if bytes < GIB {
+        format!("{:.2} MiB", bytes as f64 / MIB as f64)
+    } else if bytes < TIB {
+        format!("{:.2} GiB", bytes as f64 / GIB as f64)
+    } else {
+        format!("{:.2} TiB", bytes as f64 / TIB as f64)
+    }
+}
 
+fn main() -> std::io::Result<()> {
+    let args: Vec<String> = env::args().collect();
 
-#[tokio::main]
-async fn main() {
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_|
-        {
-            "example_tracing_aka_logging=debug,tower_http=debug,axum::rejection=trace".into()
+    if args.len() < 2 {
+        println!("Usage: {} <root_directory_path> [--dry-run]", args[0]);
+        return Ok(());
+    }
 
+    let path = std::path::Path::new(&args[1]);
+    let dry_run = args.contains(&"--dry-run".to_string());
+
+    let color_choice = if atty::is(Stream::Stdout) {
+        ColorChoice::Auto
+    } else {
+        ColorChoice::Never
+    };
+
+    let mut stdout = StandardStream::stdout(color_choice);
+
+    let mut color_spec = ColorSpec::new();
+    color_spec.set_fg(Some(Color::Magenta));
+
+    let mut total_size_reclaimed = 0u64;
+    let mut count = 0;
+
+    for entry in WalkDir::new(path).min_depth(1).into_iter().filter_map(|e| e.ok()) {
+        if entry.path().is_dir() {
+            let dir_name = entry.file_name().to_string_lossy();
+            
+            if dir_name == "node_modules" {
+                let dir_size = get_directory_size(entry.path());
+
+                stdout.set_color(&color_spec)?;
+                if dry_run {
+                    print!("Will delete directory (size: {}): ", format_bytes(dir_size));
+                } else {
+                    print!("Deleted directory (size: {}): ", format_bytes(dir_size));
+                }
+                stdout.reset()?;
+                println!("{:?}", entry.path());
+
+                total_size_reclaimed += dir_size;
+                count += 1;
+
+                if !dry_run {
+                    fs::remove_dir_all(entry.path())?;
+                }
+            }
         }
-        )).with(tracing_subscriber::fmt::layer()).init();
+    }
 
-    let app = Router::new()
-        .route("/v1/users", post(create_user)).layer(TraceLayer::new_for_http())
-        .route("/", get(heartbeat)).layer(TraceLayer::new_for_http());
+    if dry_run {
+        print!("\nTotal `node_modules` directories to be deleted: ");
+        stdout.set_color(&color_spec)?;.
+        print!("{}", count);
+        stdout.reset()?;.
 
-    let server = tokio::net::TcpListener::bind("0.0.0.0:6969").await.unwrap();
+        print!("\nTotal space to be reclaimed: ");
+        stdout.set_color(&color_spec)?;
+        println!("{}", format_bytes(total_size_reclaimed));
+        stdout.reset()?;
+    } else {
+        print!("\nTotal `node_modules` directories deleted: ");
+        stdout.set_color(&color_spec)?;
+        stdout.reset()?;
+        print!("\nTotal space reclaimed: ");
+        stdout.set_color(&color_spec)?;
+        println!("{}", format_bytes(total_size_reclaimed));
+        stdout.reset()?;
+    }
 
-    tracing::debug!("listening on {}", server.local_addr().unwrap());
-
-    axum::serve(server, app).await.unwrap()
-}
-
-
-async fn create_user(Json(paylod): Json<User>) -> (StatusCode, Json<User>) {
-    let user = User::new(&paylod.fname, &paylod.lname, &paylod.email);
-
-    (StatusCode::from_u16(200).unwrap(), Json(user))
-}
-
-async fn heartbeat() -> Html<&'static str> {
-    Html("<h3>Keep Alive</h1>")
+    Ok(())
 }
