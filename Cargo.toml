@@ -1,0 +1,20 @@
+[package]
+name = "hiddenly"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+axum = "0.7.5"
+tokio = { version = "1.0", features = ["full"]}
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tower-http = { version = "0.5.0", features = ["trace"] }
+
+[dependencies.uuid]
+version = "1.9.1"
+features = [
+    "v4",                # Lets you generate random UUIDs
+    "fast-rng",          # Use a faster (but still sufficiently random) RNG
+    "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
+]
